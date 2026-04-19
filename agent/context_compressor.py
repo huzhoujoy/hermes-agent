@@ -767,19 +767,38 @@ The user has requested that this compaction PRIORITISE preserving all informatio
                 content = str(content) if content else ""
             summary = content.strip()
 
-            # DEBUG: log raw summary to diagnose [Tool calls:] leakage into Telegram
+            # Strip internal serialization markers that the summarizer may have
+            # echoed from its input.  These markers ([Tool calls:\n...], [TOOL RESULT
+            # xxx]:) are for the summarizer's reference only and must not enter
+            # the compressed history — the main model would otherwise see them
+            # in future turns and echo them into its response text.
+            if summary:
+                _orig_len = len(summary)
+                # Remove [Tool calls:\n...\n] blocks (DOTALL, non-greedy)
+                summary = re.sub(r'\[Tool calls:\s*\n.*?\n\]', '', summary, flags=re.DOTALL)
+                # Strip [TOOL RESULT xxx]: prefix from line starts, preserve content
+                summary = re.sub(
+                    r'^\[TOOL RESULT \S+:\]\s*',
+                    '',
+                    summary,
+                    flags=re.MULTILINE,
+                )
+                if len(summary) != _orig_len:
+                    logger.warning(
+                        "SUMMARIZER_LEAKAGE: stripped %d internal tool markers from "
+                        "summary (original_len=%d, new_len=%d)",
+                        _orig_len - len(summary), _orig_len, len(summary),
+                    )
+                # Collapse excess blank lines left by removed blocks
+                summary = re.sub(r'\n{3,}', '\n\n', summary).strip()
+
             if "[Tool calls:" in summary or "[TOOL RESULT" in summary:
                 logger.warning(
-                    "SUMMARIZER_LEAKAGE: summary contains tool markers! "
-                    "summary_length=%d, content_length=%d, first_200=%r",
-                    len(summary), len(content) if isinstance(content, str) else 0,
-                    summary[:200],
+                    "SUMMARIZER_LEAKAGE: summary STILL contains tool markers after "
+                    "stripping — summary_length=%d, first_200=%r",
+                    len(summary), summary[:200],
                 )
-            else:
-                logger.debug(
-                    "Summary generated length=%d, turns_summarized=%d",
-                    len(summary), len(turns_to_summarize),
-                )
+
             # Store for iterative updates on next compaction
             self._previous_summary = summary
             self._summary_failure_cooldown_until = 0.0

@@ -461,22 +461,40 @@ class GatewayStreamConsumer:
 
     @staticmethod
     def _clean_for_display(text: str) -> str:
-        """Strip MEDIA: directives and internal markers from text before display.
+        """Strip MEDIA: directives, internal tool markers, and other
+        internal directives from text before display.
 
         The streaming path delivers raw text chunks that may include
-        ``MEDIA:<path>`` tags and ``[[audio_as_voice]]`` directives meant for
-        the platform adapter's post-processing.  The actual media files are
-        delivered separately via ``_deliver_media_from_response()`` after the
-        stream finishes — we just need to hide the raw directives from the
-        user.
+        ``MEDIA:<path>`` tags, ``[[audio_as_voice]]`` directives meant for
+        the platform adapter's post-processing, and ``[TOOL RESULT]`` /
+        ``[Tool calls:]`` serialization markers created by
+        ``_serialize_for_summary()`` in context_compressor.py.
+        The actual media files are delivered separately via
+        ``_deliver_media_from_response()`` after the stream finishes —
+        we just need to hide the raw directives and internal markers.
         """
-        if "MEDIA:" not in text and "[[audio_as_voice]]" not in text:
+        if "MEDIA:" not in text and "[[audio_as_voice]]" not in text \
+           and "[TOOL RESULT" not in text and "[Tool calls:" not in text:
             return text
+
         cleaned = text.replace("[[audio_as_voice]]", "")
         cleaned = GatewayStreamConsumer._MEDIA_RE.sub("", cleaned)
+
+        # Strip [Tool calls:\n...\n] blocks — internal serialization markers
+        # from _serialize_for_summary() that summarizer may echo into output.
+        cleaned = re.sub(r'\[Tool calls:\s*\n.*?\n\]', '', cleaned, flags=re.DOTALL)
+
+        # Strip [TOOL RESULT xxx]: prefix from lines — keep content that follows.
+        cleaned = re.sub(
+            r'^(\[TOOL RESULT \S+:\])\s*',
+            '',
+            cleaned,
+            flags=re.MULTILINE,
+        )
+
         # Collapse excessive blank lines left behind by removed tags
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-        # Strip trailing whitespace/newlines but preserve leading content
+
         return cleaned.rstrip()
 
     async def _send_new_chunk(self, text: str, reply_to_id: Optional[str]) -> Optional[str]:

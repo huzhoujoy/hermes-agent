@@ -9454,14 +9454,30 @@ class GatewayRunner:
             # Return final response, or a message if something went wrong
             final_response = result.get("final_response")
 
-            # DEBUG: detect [Tool calls:] leakage into final_response (Tg rendering bug)
-            if final_response and ("[Tool calls:" in final_response or "[TOOL RESULT" in final_response):
-                logger.warning(
-                    "TG_RENDER_LEAKAGE: final_response contains tool markers! "
-                    "length=%d, first_300=%r",
-                    len(final_response),
-                    final_response[:300],
+            # Strip internal serialization markers that can leak into
+            # final_response when the summarizer (MiniMax) echoes parts of
+            # its input.  These markers are created by _serialize_for_summary()
+            # in context_compressor.py and are for LLM reference only.
+            if final_response:
+                # Patterns for markers from _serialize_for_summary():
+                # [Tool calls:\n...  ] and [TOOL RESULT <id>]: <content>
+                _original_len = len(final_response)
+                final_response = re.sub(r'\[Tool calls:\s*\n.*?\n\]', '', final_response, flags=re.DOTALL)
+                # [TOOL RESULT xxx]: marker prefix on a line — strip just the marker,
+                # keep the content that follows (which may be legitimate echoed text).
+                # Only matches when the marker is at line start and content follows.
+                final_response = re.sub(
+                    r'^(\[TOOL RESULT \S+:\])\s*',
+                    '',
+                    final_response,
+                    flags=re.MULTILINE,
                 )
+                if len(final_response) != _original_len:
+                    logger.info(
+                        "STRIPPED_LEAKAGE: removed %d internal tool markers from final_response",
+                        _original_len - len(final_response),
+                    )
+                final_response = re.sub(r'\n{3,}', '\n\n', final_response).strip()
 
             # Extract actual token counts from the agent instance used for this run
             _last_prompt_toks = 0

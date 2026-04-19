@@ -486,9 +486,11 @@ class GatewayStreamConsumer:
 
         # Strip [TOOL RESULT xxx]: prefix from lines — keep content that follows.
         # The format is "[TOOL RESULT xxx]:" where ] comes BEFORE the final :.
-        # Using non-greedy .+? so it stops at the first ]: encountered.
+        # Strip [TOOL RESULT xxx]: prefix from lines — keep content that follows.
+        # Format: [TOOL RESULT xxx]: where ] comes BEFORE final :.
+        # [^]]+ captures xxx (non-] chars), then \]: matches the ]: suffix.
         cleaned = re.sub(
-            r'^\[TOOL RESULT .+?\]:\s*',
+            r'^\[TOOL RESULT [^]]+\]:\s*',
             '',
             cleaned,
             flags=re.MULTILINE,

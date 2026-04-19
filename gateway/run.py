@@ -9454,6 +9454,15 @@ class GatewayRunner:
             # Return final response, or a message if something went wrong
             final_response = result.get("final_response")
 
+            # DEBUG: detect [Tool calls:] leakage into final_response (Tg rendering bug)
+            if final_response and ("[Tool calls:" in final_response or "[TOOL RESULT" in final_response):
+                logger.warning(
+                    "TG_RENDER_LEAKAGE: final_response contains tool markers! "
+                    "length=%d, first_300=%r",
+                    len(final_response),
+                    final_response[:300],
+                )
+
             # Extract actual token counts from the agent instance used for this run
             _last_prompt_toks = 0
             _input_toks = 0

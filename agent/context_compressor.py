@@ -562,6 +562,12 @@ class ContextCompressor(ContextEngine):
                 if len(content) > self._CONTENT_MAX:
                     content = content[:self._CONTENT_HEAD] + "\n...[truncated]...\n" + content[-self._CONTENT_TAIL:]
                 parts.append(f"[TOOL RESULT {tool_id}]: {content}")
+                # DEBUG: log tool result markers added
+                logger.debug(
+                    "SERIALIZE: added [TOOL RESULT %s] length=%d",
+                    tool_id[:20] if tool_id else "?",
+                    len(content),
+                )
                 continue
 
             # Assistant messages: include tool call names AND arguments
@@ -585,6 +591,12 @@ class ContextCompressor(ContextEngine):
                             name = getattr(fn, "name", "?") if fn else "?"
                             tc_parts.append(f"  {name}(...)")
                     content += "\n[Tool calls:\n" + "\n".join(tc_parts) + "\n]"
+                # DEBUG: log tool call markers added to serialized summary input
+                logger.debug(
+                    "SERIALIZE: added [Tool calls:] with %d tool calls, serialized_content_length=%d",
+                    len(tc_parts),
+                    len(content),
+                )
                 parts.append(f"[ASSISTANT]: {content}")
                 continue
 
@@ -754,6 +766,20 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             if not isinstance(content, str):
                 content = str(content) if content else ""
             summary = content.strip()
+
+            # DEBUG: log raw summary to diagnose [Tool calls:] leakage into Telegram
+            if "[Tool calls:" in summary or "[TOOL RESULT" in summary:
+                logger.warning(
+                    "SUMMARIZER_LEAKAGE: summary contains tool markers! "
+                    "summary_length=%d, content_length=%d, first_200=%r",
+                    len(summary), len(content) if isinstance(content, str) else 0,
+                    summary[:200],
+                )
+            else:
+                logger.debug(
+                    "Summary generated length=%d, turns_summarized=%d",
+                    len(summary), len(turns_to_summarize),
+                )
             # Store for iterative updates on next compaction
             self._previous_summary = summary
             self._summary_failure_cooldown_until = 0.0

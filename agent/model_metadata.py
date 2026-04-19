@@ -44,8 +44,15 @@ _PROVIDER_PREFIXES: frozenset[str] = frozenset({
 
 
 _OLLAMA_TAG_PATTERN = re.compile(
-    r"^(\d+\.?\d*b|latest|stable|q\d|fp?\d|instruct|chat|coder|vision|text)",
+    r"^(\d+\.?\d*b|latest|stable|q\d|fpi?\d|instruct|chat|coder|vision|text)",
     re.IGNORECASE,
+)
+
+# CJK Unicode ranges for token estimation: Chinese (4E00-9FFF), Japanese Hiragana/Katakana
+# (3040-309F, 30A0-30FF), Korean Hangul (AC00-D7AF).  These characters average ~2
+# chars/token vs ~4 for non-CJK text, so they must be counted separately.
+_CJK_CHAR_RE = re.compile(
+    r"[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+"
 )
 
 
@@ -1079,21 +1086,39 @@ def get_model_context_length(
 
 
 def estimate_tokens_rough(text: str) -> int:
-    """Rough token estimate (~4 chars/token) for pre-flight checks.
+    """Rough token estimate (~4 chars/token for non-CJK, ~2 for CJK) for pre-flight checks.
 
     Uses ceiling division so short texts (1-3 chars) never estimate as
     0 tokens, which would cause the compressor and pre-flight checks to
     systematically undercount when many short tool results are present.
+
+    CJK-aware: Chinese/Japanese/Korean characters are counted at ~2 chars/token
+    instead of 4, correcting the ~2x underestimation that was causing
+    preflight compression to never trigger for Chinese-heavy conversations.
     """
     if not text:
         return 0
-    return (len(text) + 3) // 4
+    # Count CJK Unicode ranges: Chinese (4E00-9FFF), Japanese (3040-309F, 30A0-30FF),
+    # Korean (AC00-D7AF).  CJK characters average ~2 chars/token vs ~4 for non-CJK.
+    # NOTE: findall() returns a list of matching strings (runs), so we must sum
+    # the lengths of each run to get the actual CJK character count.
+    cjk_chars = sum(len(_m) for _m in _CJK_CHAR_RE.findall(text))
+    non_cjk = len(text) - cjk_chars
+    return (non_cjk + 3) // 4 + (cjk_chars + 1) // 2
 
 
 def estimate_messages_tokens_rough(messages: List[Dict[str, Any]]) -> int:
-    """Rough token estimate for a message list (pre-flight only)."""
-    total_chars = sum(len(str(msg)) for msg in messages)
-    return (total_chars + 3) // 4
+    """Rough token estimate for a message list (pre-flight only).
+
+    CJK-aware: each message's content is estimated using the CJK-aware
+    estimate_tokens_rough() rather than the naive character-count ÷4,
+    correcting the systematic underestimation for Chinese-heavy conversations.
+    """
+    total = 0
+    for msg in messages:
+        content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+        total += estimate_tokens_rough(str(content))
+    return total
 
 
 def estimate_request_tokens_rough(
@@ -1109,11 +1134,14 @@ def estimate_request_tokens_rough(
     tools enabled, schemas alone can add 20-30K tokens — a significant
     blind spot when only counting messages.
     """
-    total_chars = 0
+    total_tokens = 0
     if system_prompt:
-        total_chars += len(system_prompt)
+        total_tokens += estimate_tokens_rough(system_prompt)
     if messages:
-        total_chars += sum(len(str(msg)) for msg in messages)
+        for msg in messages:
+            content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+            total_tokens += estimate_tokens_rough(str(content))
+    # Tools are JSON schemas — predominantly English, ÷4 is accurate enough
     if tools:
-        total_chars += len(str(tools))
-    return (total_chars + 3) // 4
+        total_tokens += len(str(tools)) // 4
+    return total_tokens

@@ -485,8 +485,10 @@ class GatewayStreamConsumer:
         cleaned = re.sub(r'\[Tool calls:\s*\n.*?\n\]', '', cleaned, flags=re.DOTALL)
 
         # Strip [TOOL RESULT xxx]: prefix from lines — keep content that follows.
+        # The format is "[TOOL RESULT xxx]:" where ] comes BEFORE the final :.
+        # Using non-greedy .+? so it stops at the first ]: encountered.
         cleaned = re.sub(
-            r'^(\[TOOL RESULT \S+:\])\s*',
+            r'^\[TOOL RESULT .+?\]:\s*',
             '',
             cleaned,
             flags=re.MULTILINE,
